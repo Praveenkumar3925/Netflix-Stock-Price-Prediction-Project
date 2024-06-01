@@ -1,0 +1,100 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Dropout
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_squared_error
+
+# Load and preprocess the data for RNN-LSTM
+dataset_train = pd.read_csv('/content/drive/MyDrive/RNN-LSTM-main/Netflix-train.csv')
+training_set = dataset_train.iloc[:, 1:2].values
+print(dataset_train.shape)
+
+# Visualizing the training data
+plt.plot(training_set, color = 'red', label = 'Netflix Stock Price')
+plt.plot(training_set, color = 'blue', label = 'Predicted Netflix Stock Price')
+plt.title('Netflix Stock Price')
+plt.xlabel('Open Price')
+plt.ylabel('High Price')
+plt.legend()
+plt.show()
+
+# Feature Scaling
+sc = MinMaxScaler(feature_range=(0, 1))
+training_set_scaled = sc.fit_transform(training_set)
+print(training_set_scaled.shape)
+
+# Creating a data structure with 60 timesteps and 1 output
+X_train = []
+y_train = []
+for i in range(60, len(training_set_scaled)):
+    X_train.append(training_set_scaled[i-60:i, 0])
+    y_train.append(training_set_scaled[i, 0])
+X_train, y_train = np.array(X_train), np.array(y_train)
+X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+print(X_train)
+print(y_train)
+
+# Reshaping
+X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+print (X_train.shape)
+
+# Build and train the RNN-LSTM model
+regressor = Sequential()
+regressor.add(LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], 1)))
+regressor.add(Dropout(0.2))
+regressor.add(LSTM(units=50, return_sequences=True))
+regressor.add(Dropout(0.2))
+regressor.add(LSTM(units=50, return_sequences=True))
+regressor.add(Dropout(0.2))
+regressor.add(LSTM(units=50))
+regressor.add(Dropout(0.2))
+regressor.add(Dense(units=1))
+regressor.compile(optimizer='adam', loss='mean_squared_error')
+regressor.fit(X_train, y_train, epochs=100, batch_size=32)
+
+# Load test data for ARIMA and SARIMA
+dataset_test = pd.read_csv('/content/drive/MyDrive/RNN-LSTM-main/Netflix-test.csv')
+real_stock_price = dataset_test.iloc[:, 1:2].values
+
+# Make predictions using RNN-LSTM
+dataset_total = pd.concat((dataset_train['Open'], dataset_test['Open']), axis=0)
+inputs = dataset_total[len(dataset_total) - len(dataset_test) - 60:].values
+inputs = inputs.reshape(-1, 1)
+inputs = sc.transform(inputs)
+X_test_rnn = []
+for i in range(60, 80):
+    X_test_rnn.append(inputs[i-60:i, 0])
+X_test_rnn = np.array(X_test_rnn)
+X_test_rnn = np.reshape(X_test_rnn, (X_test_rnn.shape[0], X_test_rnn.shape[1], 1))
+predicted_stock_price_rnn = regressor.predict(X_test_rnn)
+predicted_stock_price_rnn = sc.inverse_transform(predicted_stock_price_rnn)
+
+# Train ARIMA model
+model_arima = ARIMA(training_set, order=(5, 1, 0))
+model_arima_fit = model_arima.fit()
+predicted_stock_price_arima = model_arima_fit.forecast(steps=len(dataset_test))
+
+# Train SARIMA model
+model_sarima = SARIMAX(training_set, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12))
+model_sarima_fit = model_sarima.fit()
+predicted_stock_price_sarima = model_sarima_fit.forecast(steps=len(dataset_test))
+
+# Combine predictions using weighted average
+ensemble_predictions = (0.6 * predicted_stock_price_rnn.flatten()) + (0.2 * predicted_stock_price_arima) + (0.2 * predicted_stock_price_sarima)
+
+# Visualize the results
+plt.plot(real_stock_price, color='red', label='Real Netflix Stock Price')
+plt.plot(ensemble_predictions, color='blue', label='Ensemble Predicted Netflix Stock Price')
+plt.title('Netflix Stock Price Prediction - Ensemble')
+plt.xlabel('Time')
+plt.ylabel('Netflix Stock Price')
+plt.legend()
+plt.show()
+
+# Calculate RMSE for the ensemble model
+rmse_ensemble = np.sqrt(mean_squared_error(real_stock_price, ensemble_predictions))
+print(f'Root Mean Squared Error (RMSE) for Ensemble Model: {rmse_ensemble}')
